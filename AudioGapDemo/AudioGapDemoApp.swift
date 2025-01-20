@@ -209,10 +209,10 @@ final class Recorder: NSObject {
         print("^^^ cannot finish recording while it's not ongoing")
         return
       }
-      defer { self.recordingContext = recordingContext }
 
       let finishTime = CMClock.hostTimeClock.time
       recordingContext.finishTime = CMClock.hostTimeClock.time
+      self.recordingContext = recordingContext
       print("^^^ recording finished at: \((finishTime - recordingContext.startTime).seconds)")
 
       recordingContext.writerInput.markAsFinished()
@@ -222,14 +222,8 @@ final class Recorder: NSObject {
       semaphore.wait()
 
       print("^^^ writer status: \(recordingContext.writer.status.debugDescription)")
-      if let writerError = recordingContext.writer.error {
-        print("^^^ writer error: \(writerError)")
-        for error in (writerError as NSError).underlyingErrors {
-          print("^^^ underlying error: \(error)")
-          if let description = OSStatus((error as NSError).code).cmSampleBufferErrorDescription {
-            print("^^^ CMSampleBufferError: \(description)")
-          }
-        }
+      if recordingContext.writer.status != .completed {
+        printWriterError()
       }
     }
   }
@@ -240,20 +234,14 @@ final class Recorder: NSObject {
       return
     }
     recordingQueue.sync {
-      guard var recordingContext, recordingContext.isRecording else {
+      guard let recordingContext, recordingContext.isRecording else {
         // print("^^^ skip sample because we are not recoding now")
         return
       }
-      defer { self.recordingContext = recordingContext }
 
       let sampleTime = sampleBuffer.presentationTimeStamp
       guard sampleTime >= recordingContext.startTime else {
         print("^^^ skip sample because it's before recording start time")
-        return
-      }
-
-      guard recordingContext.writerInput.isReadyForMoreMediaData else {
-        print("^^^ skip sample because writer input is not ready")
         return
       }
 
@@ -268,11 +256,6 @@ final class Recorder: NSObject {
         }
       }
       guard !skipSample else { return }
-
-      if recordingContext.firstSampleTime == nil {
-        recordingContext.firstSampleTime = sampleTime
-        print("^^^ first sample time: \((sampleTime - recordingContext.startTime).seconds)")
-      }
 
       if let lastSampleTime = recordingContext.lastSampleTime,
          let lastSampleDuration = recordingContext.lastSampleDuration
@@ -293,10 +276,9 @@ final class Recorder: NSObject {
               channelsCount: 2
             ) {
               print("^^^ empty audio start: \((emptySampleBuffer.presentationTimeStamp - recordingContext.startTime).seconds)")
-              print("^^^ empty audio duration: \(emptySampleBuffer.duration.seconds)")
               print("^^^ empty audio end: \((emptySampleBuffer.presentationTimeStamp + emptySampleBuffer.duration - recordingContext.startTime).seconds)")
-
-              recordingContext.writerInput.append(emptySampleBuffer)
+              print("^^^ empty audio duration: \(emptySampleBuffer.duration.seconds)")
+              append(emptySampleBuffer)
             } else {
               print("^^^ could not create empty sample buffer")
             }
@@ -304,9 +286,39 @@ final class Recorder: NSObject {
         }
       }
 
-      recordingContext.lastSampleTime = sampleTime
-      recordingContext.lastSampleDuration = sampleBuffer.duration
-      recordingContext.writerInput.append(sampleBuffer)
+      append(sampleBuffer)
+    }
+  }
+
+  private func append(_ sampleBuffer: CMSampleBuffer) {
+    guard var recordingContext else { return }
+    guard recordingContext.writerInput.isReadyForMoreMediaData else {
+      print("^^^ skip appending sample buffer, writer input not ready for more media data")
+      return
+    }
+    recordingContext.writerInput.append(sampleBuffer)
+    guard recordingContext.writerInput.append(sampleBuffer) else {
+      print("^^^ could not append sample buffer")
+      printWriterError()
+      return
+    }
+    if recordingContext.firstSampleTime == nil {
+      recordingContext.firstSampleTime = sampleBuffer.presentationTimeStamp
+      print("^^^ first appended sample time: \((sampleBuffer.presentationTimeStamp - recordingContext.startTime).seconds)")
+    }
+    recordingContext.lastSampleTime = sampleBuffer.presentationTimeStamp
+    recordingContext.lastSampleDuration = sampleBuffer.duration
+    self.recordingContext = recordingContext
+  }
+
+  private func printWriterError() {
+    guard let writerError = recordingContext?.writer.error else { return }
+    print("^^^ writer error: \(writerError)")
+    for error in (writerError as NSError).underlyingErrors {
+      print("^^^ underlying error: \(error)")
+      if let description = OSStatus((error as NSError).code).cmSampleBufferErrorDescription {
+        print("^^^ CMSampleBufferError: \(description)")
+      }
     }
   }
 }
