@@ -45,7 +45,7 @@ final class Recorder: NSObject {
   let deviceName = "MacBook Pro Microphone"
 
   /// Range of time (in seconds) whithin samples should not be recorded (for gap simulation purposes).
-  let sampleSkipTimeRange: ClosedRange<Double> = 3...6
+  let sampleSkipTimeRange: Range<Double> = 3..<6
 
   /// If `true` will append empty samples to fill detected gaps.
   let fillGaps: Bool = true
