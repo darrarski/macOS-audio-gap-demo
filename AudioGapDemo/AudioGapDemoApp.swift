@@ -1,4 +1,5 @@
 import AVFoundation
+import OSLog
 import SwiftUI
 
 @main
@@ -39,13 +40,13 @@ struct ContentView: View {
 
 final class Recorder: NSObject {
   // MARK: - Configuration
-  
+
   /// Localized name of the capture device. Change to use a different device.
   let deviceName = "MacBook Pro Microphone"
 
   /// Range of time (in seconds) whithin samples should not be recorded (for gap simulation purposes).
   let sampleSkipTimeRange: ClosedRange<Double> = 3...6
-  
+
   /// If `true` will append empty samples to fill detected gaps.
   let fillGaps: Bool = true
 
@@ -59,23 +60,24 @@ final class Recorder: NSObject {
   }
 
   private let captureQueue = DispatchQueue(label: "Recorder.captureQueue", qos: .utility)
+  private let captureLog = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Capture")
   private var captureContext: CaptureContext?
 
   func startCaptureSession() {
     stopCaptureSession()
     captureQueue.sync {
-      let discrovery = AVCaptureDevice.DiscoverySession(
+      let discovery = AVCaptureDevice.DiscoverySession(
         deviceTypes: [.microphone],
         mediaType: .audio,
         position: .unspecified
       )
-      let devices = discrovery.devices
+      let devices = discovery.devices
       for device in devices {
-        print("^^^ found device: \"\(device.localizedName)\"")
+        captureLog.info(#"Found device: "\#(device.localizedName)""#)
       }
       let device = devices.first { $0.localizedName == deviceName }
       guard let device else {
-        print("^^^ \"\(deviceName)\" device not found")
+        captureLog.error(#"Device "\#(self.deviceName)" not found"#)
         return
       }
 
@@ -87,11 +89,11 @@ final class Recorder: NSObject {
       do {
         deviceInput = try AVCaptureDeviceInput(device: device)
       } catch {
-        print("^^^ Could not create video input, error: \(error)")
+        captureLog.error("Could not create video input, error: \(error)")
         return
       }
       guard session.canAddInput(deviceInput) else {
-        print("^^^ Could not add video input")
+        captureLog.error("Could not add video input")
         return
       }
       session.addInput(deviceInput)
@@ -99,7 +101,7 @@ final class Recorder: NSObject {
       let audioOutput = AVCaptureAudioDataOutput()
       audioOutput.setSampleBufferDelegate(self, queue: captureQueue)
       guard session.canAddOutput(audioOutput) else {
-        print("Could not add audio output")
+        captureLog.error("Could not add audio output")
         return
       }
       session.addOutput(audioOutput)
@@ -114,7 +116,7 @@ final class Recorder: NSObject {
         audioOutput: audioOutput
       )
 
-      print("^^^ capture session started")
+      captureLog.info("Capture session started")
     }
   }
 
@@ -123,7 +125,7 @@ final class Recorder: NSObject {
       guard captureContext != nil else { return }
       self.captureContext?.session.stopRunning()
       self.captureContext = nil
-      print("^^^ capture session stopped")
+      captureLog.info("Capture session stopped")
     }
   }
 
@@ -141,6 +143,7 @@ final class Recorder: NSObject {
   }
 
   private let recordingQueue = DispatchQueue(label: "Recorder.recordingQueue", qos: .utility)
+  private let recordingLog = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "Recording")
   private var recordingContext: RecordingContext?
   private var isRecording: Bool { recordingContext == nil || recordingContext?.isRecording == true }
   private var isSkippingSamples = false
@@ -148,11 +151,11 @@ final class Recorder: NSObject {
   func startRecording() {
     recordingQueue.sync {
       guard isRecording else {
-        print("^^^ cannot start recording while another is ongoing")
+        recordingLog.error("Can't start recording while another is ongoing")
         return
       }
       guard let captureContext else {
-        print("^^^ cannot start recording while no capture is ongoing")
+        recordingLog.error("Can't start recording while no capture is ongoing")
         return
       }
 
@@ -168,24 +171,24 @@ final class Recorder: NSObject {
       do {
         writer = try AVAssetWriter(outputURL: fileUrl, fileType: fileType)
       } catch {
-        print("^^^ could not create AVAssetWriter")
+        recordingLog.error("Could not create AVAssetWriter")
         return
       }
 
       guard let outputSettings = captureContext.audioOutput.recommendedAudioSettingsForAssetWriter(writingTo: fileType)
       else {
-        print("^^^ could not get recommended audio settings for asset writer")
+        recordingLog.error("Could not get recommended audio settings for asset writer")
         return
       }
       let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: outputSettings)
       guard writer.canAdd(writerInput) else {
-        print("^^^ could not add writer input")
+        recordingLog.error("Could not add writer input")
         return
       }
       writer.add(writerInput)
 
       guard writer.startWriting() else {
-        print("^^^ could not start writing")
+        recordingLog.error("Could not start writing")
         return
       }
 
@@ -199,21 +202,21 @@ final class Recorder: NSObject {
       )
       self.isSkippingSamples = false
 
-      print("^^^ recording started")
+      recordingLog.info("Recording started")
     }
   }
 
   func finishRecording() {
     recordingQueue.sync {
       guard var recordingContext, recordingContext.isRecording else {
-        print("^^^ cannot finish recording while it's not ongoing")
+        recordingLog.error("Can't finish recording while it's not ongoing")
         return
       }
 
       let finishTime = CMClock.hostTimeClock.time
       recordingContext.finishTime = CMClock.hostTimeClock.time
       self.recordingContext = recordingContext
-      print("^^^ recording finished at: \((finishTime - recordingContext.startTime).seconds)")
+      recordingLog.info("Recording finished at: \((finishTime - recordingContext.startTime).seconds)")
 
       recordingContext.writerInput.markAsFinished()
       recordingContext.writer.endSession(atSourceTime: finishTime)
@@ -221,27 +224,27 @@ final class Recorder: NSObject {
       recordingContext.writer.finishWriting { semaphore.signal() }
       semaphore.wait()
 
-      print("^^^ writer status: \(recordingContext.writer.status.debugDescription)")
+      recordingLog.info("Writer status: \(recordingContext.writer.status.debugDescription)")
       if recordingContext.writer.status != .completed {
-        printWriterError()
+        logWriterError()
       }
     }
   }
 
   private func record(_ sampleBuffer: CMSampleBuffer) {
     guard sampleBuffer.isValid else {
-      print("^^^ skip invalid sample buffer")
+      recordingLog.debug("Skip invalid sample buffer")
       return
     }
     recordingQueue.sync {
       guard let recordingContext, recordingContext.isRecording else {
-        // print("^^^ skip sample because we are not recoding now")
+        recordingLog.debug("Skip sample because recoding is't ongoing")
         return
       }
 
       let sampleTime = sampleBuffer.presentationTimeStamp
       guard sampleTime >= recordingContext.startTime else {
-        print("^^^ skip sample because it's before recording start time")
+        recordingLog.debug("Skip sample because it's before recording start time")
         return
       }
 
@@ -250,9 +253,9 @@ final class Recorder: NSObject {
       if isSkippingSamples != skipSample {
         isSkippingSamples = skipSample
         if skipSample {
-          print("^^^ start skipping samples at: \(relativeSampleTime.seconds)")
+          recordingLog.info("Start skipping samples at: \(relativeSampleTime.seconds)")
         } else {
-          print("^^^ stop skipping samples at: \(relativeSampleTime.seconds)")
+          recordingLog.info("Stop skipping samples at: \(relativeSampleTime.seconds)")
         }
       }
       guard !skipSample else { return }
@@ -263,9 +266,11 @@ final class Recorder: NSObject {
         let expectedSampleTime = lastSampleTime + lastSampleDuration
         let timeGap = sampleTime - expectedSampleTime
         if timeGap > .zero {
-          print("^^^ detected gap with duration: \(timeGap.seconds)")
-          print("^^^ current sample time: \((sampleTime - recordingContext.startTime).seconds)")
-          print("^^^ expected sample time: \((expectedSampleTime - recordingContext.startTime).seconds)")
+          recordingLog.info("""
+            Detected gap with duration: \(timeGap.seconds)
+            Current sample time: \((sampleTime - recordingContext.startTime).seconds)
+            Expected sample time: \((expectedSampleTime - recordingContext.startTime).seconds)
+            """)
 
           if fillGaps {
             let sampleRate = Float64(expectedSampleTime.timescale)
@@ -275,12 +280,14 @@ final class Recorder: NSObject {
               sampleRate: sampleRate,
               channelsCount: 2
             ) {
-              print("^^^ empty audio start: \((emptySampleBuffer.presentationTimeStamp - recordingContext.startTime).seconds)")
-              print("^^^ empty audio end: \((emptySampleBuffer.presentationTimeStamp + emptySampleBuffer.duration - recordingContext.startTime).seconds)")
-              print("^^^ empty audio duration: \(emptySampleBuffer.duration.seconds)")
+              recordingLog.info("""
+                Empty audio start: \((emptySampleBuffer.presentationTimeStamp - recordingContext.startTime).seconds)
+                Empty audio end: \((emptySampleBuffer.presentationTimeStamp + emptySampleBuffer.duration - recordingContext.startTime).seconds)
+                Empty audio duration: \(emptySampleBuffer.duration.seconds)
+                """)
               append(emptySampleBuffer)
             } else {
-              print("^^^ could not create empty sample buffer")
+              recordingLog.error("Could not create empty sample buffer")
             }
           }
         }
@@ -293,31 +300,31 @@ final class Recorder: NSObject {
   private func append(_ sampleBuffer: CMSampleBuffer) {
     guard var recordingContext else { return }
     guard recordingContext.writerInput.isReadyForMoreMediaData else {
-      print("^^^ skip appending sample buffer, writer input not ready for more media data")
+      recordingLog.debug("Skip appending sample buffer, writer input not ready for more media data")
       return
     }
     recordingContext.writerInput.append(sampleBuffer)
     guard recordingContext.writerInput.append(sampleBuffer) else {
-      print("^^^ could not append sample buffer")
-      printWriterError()
+      recordingLog.error("Could not append sample buffer")
+      logWriterError()
       return
     }
     if recordingContext.firstSampleTime == nil {
       recordingContext.firstSampleTime = sampleBuffer.presentationTimeStamp
-      print("^^^ first appended sample time: \((sampleBuffer.presentationTimeStamp - recordingContext.startTime).seconds)")
+      recordingLog.info("First appended sample time: \((sampleBuffer.presentationTimeStamp - recordingContext.startTime).seconds)")
     }
     recordingContext.lastSampleTime = sampleBuffer.presentationTimeStamp
     recordingContext.lastSampleDuration = sampleBuffer.duration
     self.recordingContext = recordingContext
   }
 
-  private func printWriterError() {
+  private func logWriterError() {
     guard let writerError = recordingContext?.writer.error else { return }
-    print("^^^ writer error: \(writerError)")
+    recordingLog.error("Writer error: \(writerError)")
     for error in (writerError as NSError).underlyingErrors {
-      print("^^^ underlying error: \(error)")
+      recordingLog.error("Underlying error: \(error)")
       if let description = OSStatus((error as NSError).code).cmSampleBufferErrorDescription {
-        print("^^^ CMSampleBufferError: \(description)")
+        recordingLog.error("CMSampleBufferError: \(description)")
       }
     }
   }
@@ -349,23 +356,23 @@ extension AVAssetWriter.Status {
 extension OSStatus {
   var cmSampleBufferErrorDescription: String? {
     switch self {
-    case kCMSampleBufferError_AllocationFailed: "AllocationFailed"
-    case kCMSampleBufferError_RequiredParameterMissing: "RequiredParameterMissing"
-    case kCMSampleBufferError_AlreadyHasDataBuffer: "AlreadyHasDataBuffer"
-    case kCMSampleBufferError_BufferNotReady: "BufferNotReady"
-    case kCMSampleBufferError_SampleIndexOutOfRange: "SampleIndexOutOfRange"
-    case kCMSampleBufferError_BufferHasNoSampleSizes: "BufferHasNoSampleSizes"
-    case kCMSampleBufferError_BufferHasNoSampleTimingInfo: "BufferHasNoSampleTimingInfo"
-    case kCMSampleBufferError_ArrayTooSmall: "ArrayTooSmall"
-    case kCMSampleBufferError_InvalidEntryCount: "InvalidEntryCount"
-    case kCMSampleBufferError_CannotSubdivide: "CannotSubdivide"
-    case kCMSampleBufferError_SampleTimingInfoInvalid: "SampleTimingInfoInvalid"
-    case kCMSampleBufferError_InvalidMediaTypeForOperation: "InvalidMediaTypeForOperation"
-    case kCMSampleBufferError_InvalidSampleData: "InvalidSampleData"
-    case kCMSampleBufferError_InvalidMediaFormat: "InvalidMediaFormat"
-    case kCMSampleBufferError_Invalidated: "Invalidated"
-    case kCMSampleBufferError_DataFailed: "DataFailed"
-    case kCMSampleBufferError_DataCanceled: "DataCanceled"
+    case kCMSampleBufferError_AllocationFailed: "kCMSampleBufferError_AllocationFailed"
+    case kCMSampleBufferError_RequiredParameterMissing: "kCMSampleBufferError_RequiredParameterMissing"
+    case kCMSampleBufferError_AlreadyHasDataBuffer: "kCMSampleBufferError_AlreadyHasDataBuffer"
+    case kCMSampleBufferError_BufferNotReady: "kCMSampleBufferError_BufferNotReady"
+    case kCMSampleBufferError_SampleIndexOutOfRange: "kCMSampleBufferError_SampleIndexOutOfRange"
+    case kCMSampleBufferError_BufferHasNoSampleSizes: "kCMSampleBufferError_BufferHasNoSampleSizes"
+    case kCMSampleBufferError_BufferHasNoSampleTimingInfo: "kCMSampleBufferError_BufferHasNoSampleTimingInfo"
+    case kCMSampleBufferError_ArrayTooSmall: "kCMSampleBufferError_ArrayTooSmall"
+    case kCMSampleBufferError_InvalidEntryCount: "kCMSampleBufferError_InvalidEntryCount"
+    case kCMSampleBufferError_CannotSubdivide: "kCMSampleBufferError_CannotSubdivide"
+    case kCMSampleBufferError_SampleTimingInfoInvalid: "kCMSampleBufferError_SampleTimingInfoInvalid"
+    case kCMSampleBufferError_InvalidMediaTypeForOperation: "kCMSampleBufferError_InvalidMediaTypeForOperation"
+    case kCMSampleBufferError_InvalidSampleData: "kCMSampleBufferError_InvalidSampleData"
+    case kCMSampleBufferError_InvalidMediaFormat: "kCMSampleBufferError_InvalidMediaFormat"
+    case kCMSampleBufferError_Invalidated: "kCMSampleBufferError_Invalidated"
+    case kCMSampleBufferError_DataFailed: "kCMSampleBufferError_DataFailed"
+    case kCMSampleBufferError_DataCanceled: "kCMSampleBufferError_DataCanceled"
     default: nil
     }
   }
