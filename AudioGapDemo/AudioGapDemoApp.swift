@@ -320,13 +320,14 @@ final class Recorder: NSObject {
 
   private func logWriterError() {
     guard let writerError = recordingContext?.writer.error else { return }
-    recordingLog.error("Writer error: \(writerError)")
+    var message = "Writer error: \(writerError)"
     for error in (writerError as NSError).underlyingErrors {
-      recordingLog.error("Underlying error: \(error)")
-      if let description = OSStatus((error as NSError).code).cmSampleBufferErrorDescription {
-        recordingLog.error("CMSampleBufferError: \(description)")
+      let code = (error as NSError).code
+      if let description = OSStatus(code).cmSampleBufferErrorDescription {
+        message += "\nCMSampleBufferError: \(code) \(description)"
       }
     }
+    recordingLog.error("\(message)")
   }
 }
 
