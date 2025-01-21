@@ -400,16 +400,19 @@ extension CMSampleBuffer {
       flags: 0,
       blockBufferOut: &block
     )
-    assert(status == kCMBlockBufferNoErr)
-    guard let eBlock = block else { return nil }
+    guard status == kCMBlockBufferNoErr, let block else {
+      return nil
+    }
 
     status = CMBlockBufferFillDataBytes(
       with: 0,
-      blockBuffer: eBlock,
+      blockBuffer: block,
       offsetIntoDestination: 0,
       dataLength: blockSize
     )
-    assert(status == kCMBlockBufferNoErr)
+    guard status == kCMBlockBufferNoErr else {
+      return nil
+    }
 
     var asbd = AudioStreamBasicDescription(
       mSampleRate: sampleRate,
@@ -423,7 +426,7 @@ extension CMSampleBuffer {
       mReserved: 0
     )
 
-    var formatDesc: CMAudioFormatDescription?
+    var formatDescription: CMAudioFormatDescription?
     status = CMAudioFormatDescriptionCreate(
       allocator: kCFAllocatorDefault,
       asbd: &asbd,
@@ -432,21 +435,28 @@ extension CMSampleBuffer {
       magicCookieSize: 0,
       magicCookie: nil,
       extensions: nil,
-      formatDescriptionOut: &formatDesc
+      formatDescriptionOut: &formatDescription
     )
-    assert(status == noErr)
+    guard status == noErr, let formatDescription else {
+      return nil
+    }
 
     var sampleBuffer: CMSampleBuffer?
     status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
       allocator: kCFAllocatorDefault,
-      dataBuffer: eBlock,
-      formatDescription: formatDesc!,
+      dataBuffer: block,
+      formatDescription: formatDescription,
       sampleCount: framesCount,
-      presentationTimeStamp: CMTimeMake(value: startFrame, timescale: Int32(sampleRate)),
+      presentationTimeStamp: CMTimeMake(
+        value: startFrame,
+        timescale: Int32(sampleRate)
+      ),
       packetDescriptions: nil,
       sampleBufferOut: &sampleBuffer
     )
-    assert(status == noErr)
+    guard status == noErr, let sampleBuffer else {
+      return nil
+    }
 
     return sampleBuffer
   }
