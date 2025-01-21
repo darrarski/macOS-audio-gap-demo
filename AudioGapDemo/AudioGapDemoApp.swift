@@ -303,7 +303,6 @@ final class Recorder: NSObject {
       recordingLog.debug("Skip appending sample buffer, writer input not ready for more media data")
       return
     }
-    recordingContext.writerInput.append(sampleBuffer)
     guard recordingContext.writerInput.append(sampleBuffer) else {
       recordingLog.error("Could not append sample buffer")
       logWriterError()
