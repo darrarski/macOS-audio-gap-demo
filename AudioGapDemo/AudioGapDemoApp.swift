@@ -216,13 +216,14 @@ final class Recorder: NSObject {
       let finishTime = CMClock.hostTimeClock.time
       recordingContext.finishTime = CMClock.hostTimeClock.time
       self.recordingContext = recordingContext
-      recordingLog.info("Recording finished at: \((finishTime - recordingContext.startTime).seconds)")
+      recordingLog.info("Finishing recording at: \((finishTime - recordingContext.startTime).seconds)")
 
       recordingContext.writerInput.markAsFinished()
       recordingContext.writer.endSession(atSourceTime: finishTime)
       let semaphore = DispatchSemaphore(value: 0)
       recordingContext.writer.finishWriting { semaphore.signal() }
       semaphore.wait()
+      recordingLog.info("Recording finsihed")
 
       recordingLog.info("Writer status: \(recordingContext.writer.status.debugDescription)")
       if recordingContext.writer.status != .completed {
